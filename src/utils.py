@@ -1,5 +1,7 @@
 import numpy as np
 import pandas as pd
+from keras.utils import to_categorical
+import matplotlib.pylot as plt
 
 def set_binary_label(df, label_col, default_class='BENIGN', return_col = False):
     df_y = df[label_col].copy()
@@ -78,7 +80,27 @@ def set_multiple_label(df, label_col, label_dic, return_col = False):
         return df_y.replace(label_dic)
     else:
         return df.replace({label_col:label_dic})
-
+    
+def apply_nn_clf_with_scaler(clf, scaler, df_x, prob=True):
+    df_x_st = scaler.transform(df_x)
+    preds = clf.predict(df_x_st)
+    if prob:
+        return preds
+    else:        
+        if preds.shape[1]==1:
+            return (preds>0.5).astype("int32")
+        else:
+            return np.argmax(preds, axis=-1)
+def score_nn_clf_with_scaler(clf, scaler, df_x, df_y, binary=True):
+    df_x_st = scaler.transform(df_x)
+    if binary:
+        y = df_y.values
+    else:
+        y = to_categorical(df_y.values)
+    score = clf.evaluate(df_x_st,y, batch_size=256)
+    return score
+    
+    
 def apply_clf_with_scaler(clf, scaler, df_x, prob = False):
     df_x_st = scaler.transform(df_x)
     if prob:
@@ -88,3 +110,28 @@ def apply_clf_with_scaler(clf, scaler, df_x, prob = False):
 def score_clf_with_scaler(clf, scaler, df_x, df_y):
     df_x_st = scaler.transform(df_x)
     return clf.score(df_x_st, df_y)
+
+import itertools
+def plot_confusion_matrix(cm, classes, normalize=False, title='Confusion matrix', cmap=plt.cm.Blues):
+    """
+    This function prints and plots the confusion matrix.
+    Normalization can be applied by setting 'normalize=True'.
+    """
+    plt.imshow(cm, interpolation='nearest', cmap=cmap)
+    plt.title(title)
+    plt.colorbar()
+    tick_marks=np.arange(len(classes))
+    plt.xticks(tick_marks, classes, rotation=45)
+    plt.yticks(tick_marks, classes)
+    
+    if normalize:
+        cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+        
+    thresh = cm.max() / 2.
+    for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
+        plt.text(j, i, cm[i, j], horizontalalignment="center", color="white" if cm[i, j] > thresh else "black")
+    
+    plt.tight_layout()
+    plt.ylabel('True label')
+    plt.xlabel('Predicted label')
+    plt.show()
