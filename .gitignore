@@ -1,5 +1,6 @@
 data/
 src/.ipynb_checkpoints/
+src/__pycache__/
 src/removed_files/
 src/ignored_files/
 results/ids-dataset/
