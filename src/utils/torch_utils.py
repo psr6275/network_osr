@@ -11,7 +11,7 @@ from sklearn.preprocessing import StandardScaler
 import pandas as pd
 import logging
 
-from .skl_utils import set_binary_label,cluster_labels_2017,cluster_labels_2018, set_multiple_label
+from .skl_utils import set_binary_label,cluster_labels_2017,cluster_labels_2018, set_multiple_label, split_ooc_data
 
 SMALL = 1e-5
 
@@ -20,64 +20,135 @@ class NPsDataSet(TensorDataset):
     def __init__(self, *dataarrays):
         tensors = (torch.tensor(da).clone().detach().float() for da in dataarrays)
         super(NPsDataSet, self).__init__(*tensors)
-def load_all_data(result_dir = '../results/ids-dataset'):
-    cicids17_bn = load_cicids_data("2017","binary",result_dir,True)
-    cicids18_bn = load_cicids_data("2018","binary",result_dir,True)
-    cicids17_m = load_cicids_data("2017","mult",result_dir,True)
-    cicids18_m = load_cicids_data("2018","mult",result_dir,True)
+        
+def load_all_data(result_dir = '../results/ids-dataset', ooc_cols = None):
+    cicids17_bn = load_cicids_binary_data("2017",result_dir,True, ooc_cols)
+    cicids18_bn = load_cicids_binary_data("2018",result_dir,True, ooc_cols)
+    cicids17_m = load_cicids_mult_data("2017",result_dir,True, ooc_cols)
+    cicids18_m = load_cicids_mult_data("2018",result_dir,True, ooc_cols)
     return cicids17_bn, cicids18_bn, cicids17_m, cicids18_m
 
-
+def load_model_path(dataset, lab_name, epochs, ooc_cols, LS, OE):   
+    if ooc_cols is None:
+        oocn = "_"
+    else:
+        oocn = "_ooc_%s_"%lab_name[ooc_cols]
+    if LS:
+        lsn = "_LS_"
+    else:
+        lsn = "_"
+    if OE:
+        oen = "_OE_"
+    else:
+        oen = ""
+    bn_save_model = "cicids%s%sepochs_%d%s%sbn_clf.pth"%(dataset,oocn,epochs,lsn,oen)
+    mul_save_model = "cicids%s%sepochs_%d%s%smul_clf.pth"%(dataset,oocn,epochs,lsn,oen)
+    return bn_save_model, mul_save_model
+        
+def load_cicids_binary_data(dataname="2017",result_dir = '../results/ids-dataset', return_scaler = True, ooc_cols = None):   
     
-def load_cicids_data(dataname="2017",prob_type="binary",result_dir = '../results/ids-dataset', return_scaler = True):
     assert dataname in ["2017","2018"]
     train_df = pd.read_parquet(os.path.join(result_dir,"cicids%s_traindf.parquet"%dataname))
     test_df = pd.read_parquet(os.path.join(result_dir,"cicids%s_testdf.parquet"%dataname))
-    if prob_type =="binary":
-        train_df_bn = set_binary_label(train_df,label_col='Label', default_class='Benign',return_col=False)
-        test_df_bn = set_binary_label(test_df,label_col='Label', default_class='Benign',return_col=False)
-        
-        with open(os.path.join(result_dir,"cicids%s_stscaler_binary.pkl"%dataname),'rb') as f:
-            st_scaler_bn = pickle.load(f)
-        
-        trainx = train_df_bn.loc[:,train_df.columns!='Label']
-        trainy = train_df_bn['Label']
-        testx = test_df_bn.loc[:,test_df.columns!='Label']
-        testy = test_df_bn['Label']
-        
+    
+    if dataname=="2017":
+        lab_cluster, lab_name = cluster_labels_2017(True)
+    else:
+        lab_cluster, lab_name = cluster_labels_2018(True)
+    
+    train_df_bn = set_binary_label(train_df,label_col='Label', default_class='Benign',return_col=False, ooc_cols=ooc_cols, lab_cluster = lab_cluster)
+    test_df_bn = set_binary_label(test_df,label_col='Label', default_class='Benign',return_col=False, ooc_cols=ooc_cols, lab_cluster = lab_cluster)
+    
+    trainx = train_df_bn.loc[:,train_df.columns!='Label']
+    trainy = train_df_bn['Label']
+    testx = test_df_bn.loc[:,test_df.columns!='Label']
+    testy = test_df_bn['Label'] 
+    
+    if ooc_cols is None:
+        try:
+            with open(os.path.join(result_dir,"cicids%s_stscaler_binary.pkl"%dataname),'rb') as f:
+                st_scaler_bn = pickle.load(f)
+        except:
+            st_scaler_bn = StandardScaler()
+            st_scaler_bn.fit(trainx)
+            with open(os.path.join(result_dir,"cicids%s_stscaler_binary.pkl"%dataname),'wb') as f:
+                pickle.dump(st_scaler_bn, f)
+    else:
+        try:
+            with open(os.path.join(result_dir,"cicids%s_ooc_%s_stscaler_binary.pkl"%(dataname,lab_name[ooc_cols])),'rb') as f:
+                st_scaler_bn = pickle.load(f)
+        except:
+            st_scaler_bn = StandardScaler()
+            st_scaler_bn.fit(trainx)
+            with open(os.path.join(result_dir,"cicids%s_ooc_%s_stscaler_binary.pkl"%(dataname,lab_name[ooc_cols])),'wb') as f:
+                pickle.dump(st_scaler_bn, f)
+
+    if return_scaler:
+        return trainx, trainy, testx, testy, st_scaler_bn
+    else:
         trainx_st = st_scaler_bn.transform(trainx)
         testx_st = st_scaler_bn.transform(testx)
+        return trainx_st, trainy, testx_st, testy
         
-        if return_scaler:
-            return trainx, trainy, testx, testy, st_scaler_bn
-        else:
-            return trainx_st, trainy, testx_st, testy
-        
+    
+def load_cicids_mult_data(dataname="2017",result_dir = '../results/ids-dataset', return_scaler = True, ooc_cols = None):   
+    
+    assert dataname in ["2017","2018"]
+    train_df = pd.read_parquet(os.path.join(result_dir,"cicids%s_traindf.parquet"%dataname))
+    test_df = pd.read_parquet(os.path.join(result_dir,"cicids%s_testdf.parquet"%dataname))
+    
+    if dataname=="2017":
+        lab_dic, lab_name = cluster_labels_2017()
     else:
-        if dataname=="2017":
-            lab_dic, lab_name = cluster_labels_2017()
-        else:
-            lab_dic, lab_name = cluster_labels_2018()
-        train_mul= set_multiple_label(train_df,label_col='Label', label_dic = lab_dic, return_col=False)
-        test_mul = set_multiple_label(test_df,label_col='Label', label_dic = lab_dic, return_col=False)
-        
-        trainx_m = train_mul.loc[:,train_mul.columns!='Label']
-        trainy_m = train_mul['Label']
-        testx_m = test_mul.loc[:,test_mul.columns!='Label']
-        testy_m = test_mul['Label']
-        num_class = len(np.unique(testy_m))
-        
-        with open(os.path.join(result_dir,"cicids%s_stscaler.pkl"%dataname),'rb') as f:
-            st_scaler_mul = pickle.load(f)
+        lab_dic, lab_name = cluster_labels_2018()
+    
+    
+    train_mul= set_multiple_label(train_df,label_col='Label', label_dic = lab_dic, return_col=False)
+    test_mul = set_multiple_label(test_df,label_col='Label', label_dic = lab_dic, return_col=False)
+    
+    if ooc_cols is not None:
+        train_mul, train_ooc = split_ooc_data(train_mul, lab_name, ooc_cols)
+        test_mul, _ = split_ooc_data(test_mul, lab_name, ooc_cols)
 
-        
-        trainx_m_st = st_scaler_mul.transform(trainx_m)
-        testx_m_st = st_scaler_mul.transform(testx_m)
-        
-        if return_scaler:
+    trainx_m = train_mul.loc[:,train_mul.columns!='Label']
+    trainy_m = train_mul['Label']
+    testx_m = test_mul.loc[:,test_mul.columns!='Label']
+    testy_m = test_mul['Label']
+    num_class = len(np.unique(testy_m))
+    
+    if ooc_cols is None:
+        try:
+            with open(os.path.join(result_dir,"cicids%s_stscaler.pkl"%dataname),'rb') as f:
+                st_scaler_mul = pickle.load(f)
+        except:
+            st_scaler_mul = StandardScaler()
+            st_scaler_mul.fit(trainx_m)
+            with open(os.path.join(result_dir,"cicids%s_stscaler.pkl"%dataname),'wb') as f:
+                pickle.dump(st_scaler_mul, f)
+    else:
+        trainx_ooc = train_ooc.loc[:,train_ooc.columns!='Label']
+        try:
+            with open(os.path.join(result_dir,"cicids%s_ooc_%s_stscaler.pkl"%(dataname,lab_name[ooc_cols])),'rb') as f:
+                st_scaler_mul = pickle.load(f)
+        except:
+            st_scaler_mul = StandardScaler()
+            st_scaler_mul.fit(trainx_m)
+            with open(os.path.join(result_dir,"cicids%s_ooc_%s_stscaler.pkl"%(dataname,lab_name[ooc_cols])),'wb') as f:
+                pickle.dump(st_scaler_mul, f)
+
+    if return_scaler:
+        if ooc_cols is None:
             return trainx_m, trainy_m, testx_m, testy_m, st_scaler_mul
         else:
+            return trainx_m, trainy_m, testx_m, testy_m, trainx_ooc, st_scaler_mul
+    else:
+        trainx_m_st = st_scaler_mul.transform(trainx_m)
+        testx_m_st = st_scaler_mul.transform(testx_m)
+        if ooc_cols is None:
             return trainx_m_st, trainy_m, testx_m_st, testy_m
+        else:            
+            trainx_ooc_st = st_scaler_mul.transform(trainx_ooc)
+            return trainx_m_st, trainy_m, testx_m_st, testy_m, train_ooc_st
 
 def dataloader_with_scaler(datadfs, scaler, batch_size, shuffle):
     scaled_df = scaler.transform(datadfs[0])
